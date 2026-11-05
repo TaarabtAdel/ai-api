@@ -4,6 +4,7 @@ const express = require("express");
 const { CATALOG, normalizeModelId, providerForModel } = require("./models");
 const openai = require("./upstream/openai");
 const anthropic = require("./upstream/anthropic");
+const openaiAudio = require("./upstream/openai-audio");
 
 const PORT = Number(process.env.PORT || 7861);
 const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || process.env.OPEN_AI_KEY || "").trim();
@@ -106,6 +107,67 @@ app.post("/v1/chat/completions", authMiddleware, async (req, res) => {
         type: "upstream_error",
       },
     });
+  }
+});
+
+function requireOpenAiKey(res) {
+  if (OPENAI_API_KEY) return true;
+  res.status(503).json({
+    error: { message: "Thiếu OPENAI_API_KEY (hoặc OPEN_AI_KEY) trong ai-api/.env", type: "configuration_error" },
+  });
+  return false;
+}
+
+function upstreamFailure(res, error) {
+  const aborted = error.name === "AbortError";
+  return res.status(504).json({
+    error: { message: aborted ? "Upstream timeout" : error.message || "Upstream error", type: "upstream_error" },
+  });
+}
+
+/** Speech-to-text — body JSON: { audio_base64, mime_type, model?, language?, prompt? } */
+app.post("/v1/audio/transcriptions", authMiddleware, async (req, res) => {
+  if (!requireOpenAiKey(res)) return undefined;
+  if (!req.body?.audio_base64) {
+    return res.status(422).json({ error: { message: "Thiếu audio_base64", type: "invalid_request_error" } });
+  }
+  try {
+    const result = await openaiAudio.transcribe({
+      apiKey: OPENAI_API_KEY,
+      audioBase64: req.body.audio_base64,
+      mimeType: req.body.mime_type,
+      model: req.body.model,
+      language: req.body.language,
+      prompt: req.body.prompt,
+      timeoutMs: UPSTREAM_TIMEOUT_MS,
+    });
+    return res.status(result.status).json(result.data);
+  } catch (error) {
+    return upstreamFailure(res, error);
+  }
+});
+
+/** Text-to-speech — body JSON: { input, model?, voice?, response_format?, instructions? } → audio bytes */
+app.post("/v1/audio/speech", authMiddleware, async (req, res) => {
+  if (!requireOpenAiKey(res)) return undefined;
+  if (!String(req.body?.input || "").trim()) {
+    return res.status(422).json({ error: { message: "Thiếu input", type: "invalid_request_error" } });
+  }
+  try {
+    const result = await openaiAudio.speech({
+      apiKey: OPENAI_API_KEY,
+      input: req.body.input,
+      model: req.body.model,
+      voice: req.body.voice,
+      format: req.body.response_format,
+      instructions: req.body.instructions,
+      timeoutMs: UPSTREAM_TIMEOUT_MS,
+    });
+    if (!result.audio) return res.status(result.status).json(result.data);
+    res.setHeader("Content-Type", result.contentType);
+    return res.status(200).send(result.audio);
+  } catch (error) {
+    return upstreamFailure(res, error);
   }
 });
 
