@@ -24,7 +24,7 @@ async function transcribe({ apiKey, audioBase64, mimeType, model, language, prom
   const buffer = Buffer.from(String(audioBase64 || ""), "base64");
   const form = new FormData();
   form.append("file", new Blob([buffer], { type: mime }), `speech.${EXTENSION_BY_MIME[mime] || "webm"}`);
-  form.append("model", model || "gpt-4o-mini-transcribe");
+  form.append("model", model || process.env.OPENAI_STT_MODEL || "whisper-1");
   if (language) form.append("language", language);
   if (prompt) form.append("prompt", prompt);
   form.append("response_format", "json");
@@ -47,12 +47,13 @@ async function transcribe({ apiKey, audioBase64, mimeType, model, language, prom
 /** Text → audio (mp3) qua OpenAI /audio/speech */
 async function speech({ apiKey, input, model, voice, format, instructions, timeoutMs }) {
   const payload = {
-    model: model || "gpt-4o-mini-tts",
+    model: model || process.env.OPENAI_TTS_MODEL || "tts-1",
     input: String(input || "").slice(0, 4000),
     voice: voice || "alloy",
     response_format: format || "mp3",
   };
-  if (instructions) payload.instructions = instructions;
+  // Chỉ model gpt-4o-*-tts hỗ trợ instructions
+  if (instructions && String(payload.model).includes("gpt-4o")) payload.instructions = instructions;
 
   const { signal, done } = withTimeout(timeoutMs);
   try {
